@@ -1,19 +1,4 @@
 ---
-# ===========================================================================
-# playbook.yml — Automated Twenty CRM deployment
-#
-# Satisfies:
-#   - dependency + Docker installation
-#   - dedicated application user
-#   - directory creation with permissions
-#   - repo clone
-#   - Jinja2-templated configuration
-#   - docker compose startup
-#   - handler-driven restart on config change
-#   - verification
-#   - idempotency (every task uses Ansible modules with proper state checks)
-# ===========================================================================
-
 - name: Deploy Twenty CRM
   hosts: twenty_crm
   become: true
@@ -29,9 +14,6 @@
 
   tasks:
 
-    # -----------------------------------------------------------------
-    # 1. Base dependencies
-    # -----------------------------------------------------------------
     - name: Update apt cache
       ansible.builtin.apt:
         update_cache: true
@@ -49,14 +31,12 @@
         state: present
 
     - name: Install Python dependencies for Docker modules
-        ansible.builtin.apt:
-          name:
-           - python3-docker
-           - python3-requests
+      ansible.builtin.apt:
+        name:
+          - python3-docker
+          - python3-requests
         state: present
-    # -----------------------------------------------------------------
-    # 2. Install Docker Engine (official Docker apt repo)
-    # -----------------------------------------------------------------
+
     - name: Create keyrings directory
       ansible.builtin.file:
         path: /etc/apt/keyrings
@@ -87,9 +67,6 @@
         state: started
         enabled: true
 
-    # -----------------------------------------------------------------
-    # 3. Dedicated application user
-    # -----------------------------------------------------------------
     - name: Create application group
       ansible.builtin.group:
         name: "{{ app_group }}"
@@ -104,15 +81,12 @@
         create_home: true
         state: present
 
-    - name: Add application user to docker group (so it can run docker compose)
+    - name: Add application user to docker group
       ansible.builtin.user:
         name: "{{ app_user }}"
         groups: docker
         append: true
 
-    # -----------------------------------------------------------------
-    # 4. Required directories + permissions
-    # -----------------------------------------------------------------
     - name: Create application directory structure
       ansible.builtin.file:
         path: "{{ item }}"
@@ -126,9 +100,6 @@
         - "{{ app_home }}/.docker-data/postgres"
         - "{{ app_home }}/.docker-data/server-local-data"
 
-    # -----------------------------------------------------------------
-    # 5. Clone Twenty CRM repository
-    # -----------------------------------------------------------------
     - name: Clone Twenty CRM repository
       ansible.builtin.git:
         repo: "{{ twenty_repo_url }}"
@@ -139,9 +110,6 @@
       become_user: "{{ app_user }}"
       register: repo_clone
 
-    # -----------------------------------------------------------------
-    # 6. Configure the application via Jinja2 template (.env)
-    # -----------------------------------------------------------------
     - name: Render .env configuration from Jinja2 template
       ansible.builtin.template:
         src: templates/env.j2
@@ -152,9 +120,6 @@
       notify: restart twenty crm
       register: env_config
 
-    # -----------------------------------------------------------------
-    # 7. Start Twenty CRM via Docker Compose
-    # -----------------------------------------------------------------
     - name: Start Twenty CRM stack with Docker Compose
       community.docker.docker_compose_v2:
         project_src: "{{ app_dir }}/packages/twenty-docker"
@@ -164,9 +129,6 @@
       become_user: "{{ app_user }}"
       register: compose_result
 
-    # -----------------------------------------------------------------
-    # 8. Verify Twenty CRM is running successfully
-    # -----------------------------------------------------------------
     - name: Wait for Twenty CRM frontend port to accept connections
       ansible.builtin.wait_for:
         host: 127.0.0.1
