@@ -48,13 +48,12 @@
           - python3-pip
         state: present
 
-    - name: Install docker python SDK (needed by community.docker modules)
-      ansible.builtin.pip:
-        name:
-          - docker
-          - requests
+    - name: Install Python dependencies for Docker modules
+        ansible.builtin.apt:
+          name:
+           - python3-docker
+           - python3-requests
         state: present
-
     # -----------------------------------------------------------------
     # 2. Install Docker Engine (official Docker apt repo)
     # -----------------------------------------------------------------
