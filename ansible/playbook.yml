@@ -1,0 +1,204 @@
+---
+# ===========================================================================
+# playbook.yml — Automated Twenty CRM deployment
+#
+# Satisfies:
+#   - dependency + Docker installation
+#   - dedicated application user
+#   - directory creation with permissions
+#   - repo clone
+#   - Jinja2-templated configuration
+#   - docker compose startup
+#   - handler-driven restart on config change
+#   - verification
+#   - idempotency (every task uses Ansible modules with proper state checks)
+# ===========================================================================
+
+- name: Deploy Twenty CRM
+  hosts: twenty_crm
+  become: true
+  gather_facts: true
+
+  handlers:
+    - name: restart twenty crm
+      community.docker.docker_compose_v2:
+        project_src: "{{ app_dir }}/packages/twenty-docker"
+        state: restarted
+      become: true
+      become_user: "{{ app_user }}"
+
+  tasks:
+
+    # -----------------------------------------------------------------
+    # 1. Base dependencies
+    # -----------------------------------------------------------------
+    - name: Update apt cache
+      ansible.builtin.apt:
+        update_cache: true
+        cache_valid_time: 3600
+
+    - name: Install base packages
+      ansible.builtin.apt:
+        name:
+          - ca-certificates
+          - curl
+          - gnupg
+          - lsb-release
+          - git
+          - python3-pip
+        state: present
+
+    - name: Install docker python SDK (needed by community.docker modules)
+      ansible.builtin.pip:
+        name:
+          - docker
+          - requests
+        state: present
+
+    # -----------------------------------------------------------------
+    # 2. Install Docker Engine (official Docker apt repo)
+    # -----------------------------------------------------------------
+    - name: Create keyrings directory
+      ansible.builtin.file:
+        path: /etc/apt/keyrings
+        state: directory
+        mode: '0755'
+
+    - name: Add Docker's official GPG key
+      ansible.builtin.apt_key:
+        url: https://download.docker.com/linux/ubuntu/gpg
+        keyring: /etc/apt/keyrings/docker.gpg
+        state: present
+
+    - name: Add Docker apt repository
+      ansible.builtin.apt_repository:
+        repo: "deb [arch={{ 'amd64' if ansible_architecture == 'x86_64' else ansible_architecture }} signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu {{ ansible_distribution_release }} stable"
+        state: present
+        filename: docker
+
+    - name: Install Docker packages
+      ansible.builtin.apt:
+        name: "{{ docker_packages }}"
+        state: present
+        update_cache: true
+
+    - name: Ensure Docker service is running and enabled
+      ansible.builtin.systemd:
+        name: docker
+        state: started
+        enabled: true
+
+    # -----------------------------------------------------------------
+    # 3. Dedicated application user
+    # -----------------------------------------------------------------
+    - name: Create application group
+      ansible.builtin.group:
+        name: "{{ app_group }}"
+        state: present
+
+    - name: Create dedicated application user
+      ansible.builtin.user:
+        name: "{{ app_user }}"
+        group: "{{ app_group }}"
+        home: "{{ app_home }}"
+        shell: /bin/bash
+        create_home: true
+        state: present
+
+    - name: Add application user to docker group (so it can run docker compose)
+      ansible.builtin.user:
+        name: "{{ app_user }}"
+        groups: docker
+        append: true
+
+    # -----------------------------------------------------------------
+    # 4. Required directories + permissions
+    # -----------------------------------------------------------------
+    - name: Create application directory structure
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        owner: "{{ app_user }}"
+        group: "{{ app_group }}"
+        mode: '0750'
+      loop:
+        - "{{ app_dir }}"
+        - "{{ app_home }}/.docker-data"
+        - "{{ app_home }}/.docker-data/postgres"
+        - "{{ app_home }}/.docker-data/server-local-data"
+
+    # -----------------------------------------------------------------
+    # 5. Clone Twenty CRM repository
+    # -----------------------------------------------------------------
+    - name: Clone Twenty CRM repository
+      ansible.builtin.git:
+        repo: "{{ twenty_repo_url }}"
+        dest: "{{ app_dir }}"
+        version: "{{ twenty_repo_version }}"
+        force: false
+      become: true
+      become_user: "{{ app_user }}"
+      register: repo_clone
+
+    # -----------------------------------------------------------------
+    # 6. Configure the application via Jinja2 template (.env)
+    # -----------------------------------------------------------------
+    - name: Render .env configuration from Jinja2 template
+      ansible.builtin.template:
+        src: templates/env.j2
+        dest: "{{ app_dir }}/packages/twenty-docker/.env"
+        owner: "{{ app_user }}"
+        group: "{{ app_group }}"
+        mode: '0640'
+      notify: restart twenty crm
+      register: env_config
+
+    # -----------------------------------------------------------------
+    # 7. Start Twenty CRM via Docker Compose
+    # -----------------------------------------------------------------
+    - name: Start Twenty CRM stack with Docker Compose
+      community.docker.docker_compose_v2:
+        project_src: "{{ app_dir }}/packages/twenty-docker"
+        state: present
+        pull: "missing"
+      become: true
+      become_user: "{{ app_user }}"
+      register: compose_result
+
+    # -----------------------------------------------------------------
+    # 8. Verify Twenty CRM is running successfully
+    # -----------------------------------------------------------------
+    - name: Wait for Twenty CRM frontend port to accept connections
+      ansible.builtin.wait_for:
+        host: 127.0.0.1
+        port: "{{ twenty_app_port }}"
+        state: started
+        delay: 5
+        timeout: 180
+
+    - name: Verify Twenty CRM HTTP endpoint responds
+      ansible.builtin.uri:
+        url: "http://127.0.0.1:{{ twenty_app_port }}"
+        status_code: 200,301,302
+        return_content: false
+      register: http_check
+      retries: 10
+      delay: 10
+      until: http_check.status in [200, 301, 302]
+
+    - name: Show running containers for confirmation
+      ansible.builtin.command: docker compose -p twenty-docker ps
+      args:
+        chdir: "{{ app_dir }}/packages/twenty-docker"
+      become: true
+      become_user: "{{ app_user }}"
+      register: ps_output
+      changed_when: false
+
+    - name: Print verification result
+      ansible.builtin.debug:
+        msg: |
+          Twenty CRM is UP and reachable on port {{ twenty_app_port }}.
+          HTTP status: {{ http_check.status }}
+          Containers:
+          {{ ps_output.stdout }}
