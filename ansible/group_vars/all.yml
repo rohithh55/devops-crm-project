@@ -1,0 +1,41 @@
+---
+# ---------------------------------------------------------------------------
+# Application user / filesystem layout
+# ---------------------------------------------------------------------------
+app_user: twenty
+app_group: twenty
+app_home: /home/twenty
+app_dir: /home/twenty/twenty-crm
+
+# ---------------------------------------------------------------------------
+# Source repository
+# ---------------------------------------------------------------------------
+twenty_repo_url: https://github.com/twentyhq/twenty.git
+twenty_repo_version: main
+
+# ---------------------------------------------------------------------------
+# Docker packages
+# ---------------------------------------------------------------------------
+docker_packages:
+  - docker-ce
+  - docker-ce-cli
+  - containerd.io
+  - docker-buildx-plugin
+  - docker-compose-plugin
+
+# ---------------------------------------------------------------------------
+# Application configuration (rendered into docker/.env via Jinja2 template)
+# These map to Twenty CRM's docker-compose environment variables.
+# ---------------------------------------------------------------------------
+twenty_app_port: 3000
+twenty_server_port: 3000
+twenty_server_url: "http://localhost:{{ twenty_app_port }}"
+twenty_pg_database_user: postgres
+twenty_pg_database_password: "ChangeMe_Str0ngPass!"          # change before real use
+twenty_pg_database_name: default
+twenty_app_secret: "please-generate-a-long-random-secret-key"  # change before real use
+twenty_storage_type: local
+twenty_disable_db_migrations: "false"
+
+# Tag/version of the twenty docker images to pull
+twenty_tag: latest
